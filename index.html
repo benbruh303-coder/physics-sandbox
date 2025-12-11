@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Physics Sandbox</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useRef, useEffect, useState } = React;
+        
+        const PhysicsSandbox = () => {
+          const canvasRef = useRef(null);
+          const [isPaused, setIsPaused] = useState(false);
+          const [gravity, setGravity] = useState(0.5);
+          const [restitution, setRestitution] = useState(0.7);
+          const [tool, setTool] = useState('circle');
+          const [objects, setObjects] = useState([]);
+          const [walls, setWalls] = useState([]);
+          const animationRef = useRef(null);
+          const mouseRef = useRef({ down: false, x: 0, y: 0, drawStart: null, draggedObj: null });
+
+          useEffect(() => {
+            const canvas = canvasRef.current;
+            const ctx = canvas.getContext('2d');
+            let objs = objects;
+            let wls = walls;
+
+            const updatePhysics = () => {
+              if (isPaused) return;
+
+              objs = objs.map(obj => {
+                if (obj.dragging) return obj;
+
+                obj.vy += gravity;
+                obj.x += obj.vx;
+                obj.y += obj.vy;
+
+                if (obj.type === 'circle') {
+                  if (obj.x - obj.radius < 0) {
+                    obj.x = obj.radius;
+                    obj.vx *= -restitution;
+                  }
+                  if (obj.x + obj.radius > canvas.width) {
+                    obj.x = canvas.width - obj.radius;
+                    obj.vx *= -restitution;
+                  }
+                  if (obj.y + obj.radius > canvas.height) {
+                    obj.y = canvas.height - obj.radius;
+                    obj.vy *= -restitution;
+                    obj.vx *= 0.95;
+                  }
+                  if (obj.y - obj.radius < 0) {
+                    obj.y = obj.radius;
+                    obj.vy *= -restitution;
+                  }
+                } else {
+                  if (obj.x < 0) {
+                    obj.x = 0;
+                    obj.vx *= -restitution;
+                  }
+                  if (obj.x + obj.width > canvas.width) {
+                    obj.x = canvas.width - obj.width;
+                    obj.vx *= -restitution;
+                  }
+                  if (obj.y + obj.height > canvas.height) {
+                    obj.y = canvas.height - obj.height;
+                    obj.vy *= -restitution;
+                    obj.vx *= 0.95;
+                  }
+                  if (obj.y < 0) {
+                    obj.y = 0;
+                    obj.vy *= -restitution;
+                  }
+                }
+
+                wls.forEach(wall => {
+                  if (obj.type === 'circle') {
+                    const closestX = Math.max(wall.x, Math.min(obj.x, wall.x + wall.width));
+                    const closestY = Math.max(wall.y, Math.min(obj.y, wall.y + wall.height));
+                    const dx = obj.x - closestX;
+                    const dy = obj.y - closestY;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist < obj.radius) {
+                      const angle = Math.atan2(dy, dx);
+                      obj.x = closestX + Math.cos(angle) * obj.radius;
+                      obj.y = closestY + Math.sin(angle) * obj.radius;
+                      
+                      const nx = dx / dist;
+                      const ny = dy / dist;
+                      const dot = obj.vx * nx + obj.vy * ny;
+                      obj.vx = (obj.vx - 2 * dot * nx) * restitution;
+                      obj.vy = (obj.vy - 2 * dot * ny) * restitution;
+                    }
+                  } else {
+                    if (obj.x < wall.x + wall.width && obj.x + obj.width > wall.x &&
+                        obj.y < wall.y + wall.height && obj.y + obj.height > wall.y) {
+                      const overlapX = Math.min(obj.x + obj.width - wall.x, wall.x + wall.width - obj.x);
+                      const overlapY = Math.min(obj.y + obj.height - wall.y, wall.y + wall.height - obj.y);
+                      
+                      if (overlapX < overlapY) {
+                        if (obj.x < wall.x) obj.x = wall.x - obj.width;
+                        else obj.x = wall.x + wall.width;
+                        obj.vx *= -restitution;
+                      } else {
+                        if (obj.y < wall.y) obj.y = wall.y - obj.height;
+                        else obj.y = wall.y + wall.height;
+                        obj.vy *= -restitution;
+                      }
+                    }
+                  }
+                });
+
+                return obj;
+              });
+
+              for (let i = 0; i < objs.length; i++) {
+                for (let j = i + 1; j < objs.length; j++) {
+                  const a = objs[i];
+                  const b = objs[j];
+                  
+                  if (a.type === 'circle' && b.type === 'circle') {
+                    const dx = b.x - a.x;
+                    const dy = b.y - a.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    const minDist = a.radius + b.radius;
+
+                    if (dist < minDist) {
+                      const angle = Math.atan2(dy, dx);
+                      const overlap = minDist - dist;
+                      
+                      a.x -= Math.cos(angle) * overlap * 0.5;
+                      a.y -= Math.sin(angle) * overlap * 0.5;
+                      b.x += Math.cos(angle) * overlap * 0.5;
+                      b.y += Math.sin(angle) * overlap * 0.5;
+
+                      const nx = dx / dist;
+                      const ny = dy / dist;
+                      const dvx = b.vx - a.vx;
+                      const dvy = b.vy - a.vy;
+                      const dot = dvx * nx + dvy * ny;
+
+                      if (dot < 0) {
+                        a.vx += dot * nx * restitution;
+                        a.vy += dot * ny * restitution;
+                        b.vx -= dot * nx * restitution;
+                        b.vy -= dot * ny * restitution;
+                      }
+                    }
+                  }
+                }
+              }
+
+              setObjects([...objs]);
+            };
+
+            const draw = () => {
+              ctx.fillStyle = '#0a0a0a';
+              ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+              ctx.fillStyle = '#444';
+              wls.forEach(wall => {
+                ctx.fillRect(wall.x, wall.y, wall.width, wall.height);
+              });
+
+              if (mouseRef.current.down && tool === 'wall' && mouseRef.current.drawStart) {
+                ctx.strokeStyle = '#666';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(
+                  mouseRef.current.drawStart.x,
+                  mouseRef.current.drawStart.y,
+                  mouseRef.current.x - mouseRef.current.drawStart.x,
+                  mouseRef.current.y - mouseRef.current.drawStart.y
+                );
+              }
+
+              objs.forEach(obj => {
+                if (obj.type === 'circle') {
+                  ctx.fillStyle = obj.color;
+                  ctx.beginPath();
+                  ctx.arc(obj.x, obj.y, obj.radius, 0, Math.PI * 2);
+                  ctx.fill();
+                } else {
+                  ctx.fillStyle = obj.color;
+                  ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
+                }
+              });
+
+              updatePhysics();
+              animationRef.current = requestAnimationFrame(draw);
+            };
+
+            draw();
+
+            return () => {
+              if (animationRef.current) {
+                cancelAnimationFrame(animationRef.current);
+              }
+            };
+          }, [isPaused, gravity, restitution, objects, walls, tool]);
+
+          const handleMouseDown = (e) => {
+            const rect = canvasRef.current.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            mouseRef.current = { down: true, x, y };
+
+            const clickedObj = objects.find(obj => {
+              if (obj.type === 'circle') {
+                const dx = obj.x - x;
+                const dy = obj.y - y;
+                return Math.sqrt(dx * dx + dy * dy) < obj.radius;
+              } else {
+                return x > obj.x && x < obj.x + obj.width && y > obj.y && y < obj.y + obj.height;
+              }
+            });
+
+            if (clickedObj) {
+              mouseRef.current.draggedObj = clickedObj;
+              clickedObj.dragging = true;
+              clickedObj.vx = 0;
+              clickedObj.vy = 0;
+              setObjects([...objects]);
+            } else if (tool === 'wall') {
+              mouseRef.current.drawStart = { x, y };
+            } else {
+              const newObj = tool === 'circle' 
+                ? { 
+                    type: 'circle', 
+                    x, 
+                    y, 
+                    radius: 20 + Math.random() * 20, 
+                    vx: (Math.random() - 0.5) * 5, 
+                    vy: 0,
+                    color: `hsl(${Math.random() * 360}, 70%, 60%)`
+                  }
+                : { 
+                    type: 'box', 
+                    x: x - 20, 
+                    y: y - 20, 
+                    width: 30 + Math.random() * 30, 
+                    height: 30 + Math.random() * 30,
+                    vx: (Math.random() - 0.5) * 5, 
+                    vy: 0,
+                    color: `hsl(${Math.random() * 360}, 70%, 60%)`
+                  };
+              setObjects([...objects, newObj]);
+            }
+          };
+
+          const handleMouseMove = (e) => {
+            const rect = canvasRef.current.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            if (mouseRef.current.down) {
+              if (mouseRef.current.draggedObj) {
+                const obj = mouseRef.current.draggedObj;
+                obj.vx = (x - obj.x) * 0.2;
+                obj.vy = (y - obj.y) * 0.2;
+                if (obj.type === 'circle') {
+                  obj.x = x;
+                  obj.y = y;
+                } else {
+                  obj.x = x - obj.width / 2;
+                  obj.y = y - obj.height / 2;
+                }
+                setObjects([...objects]);
+              }
+              mouseRef.current.x = x;
+              mouseRef.current.y = y;
+            }
+          };
+
+          const handleMouseUp = (e) => {
+            if (tool === 'wall' && mouseRef.current.drawStart) {
+              const rect = canvasRef.current.getBoundingClientRect();
+              const x = e.clientX - rect.left;
+              const y = e.clientY - rect.top;
+              const startX = Math.min(mouseRef.current.drawStart.x, x);
+              const startY = Math.min(mouseRef.current.drawStart.y, y);
+              const width = Math.abs(x - mouseRef.current.drawStart.x);
+              const height = Math.abs(y - mouseRef.current.drawStart.y);
+              
+              if (width > 5 && height > 5) {
+                setWalls([...walls, { x: startX, y: startY, width, height }]);
+              }
+            }
+            
+            if (mouseRef.current.draggedObj) {
+              mouseRef.current.draggedObj.dragging = false;
+              setObjects([...objects]);
+            }
+            
+            mouseRef.current = { down: false, x: 0, y: 0, drawStart: null, draggedObj: null };
+          };
+
+          const Circle = ({ size }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10"/>
+            </svg>
+          );
+
+          const Square = ({ size }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+            </svg>
+          );
+
+          const Pencil = ({ size }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+            </svg>
+          );
+
+          const Play = ({ size }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polygon points="6 3 20 12 6 21 6 3"/>
+            </svg>
+          );
+
+          const Pause = ({ size }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>
+            </svg>
+          );
+
+          const Trash2 = ({ size }) => (
+            <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            </svg>
+          );
+
+          return (
+            <div className="w-full h-screen bg-black flex flex-col">
+              <div className="bg-gray-900 p-4 flex gap-4 items-center flex-wrap">
+                <button
+                  onClick={() => setIsPaused(!isPaused)}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded flex items-center gap-2 text-white"
+                >
+                  {isPaused ? <Play size={20} /> : <Pause size={20} />}
+                  {isPaused ? 'Resume' : 'Pause'}
+                </button>
+                
+                <button
+                  onClick={() => { setObjects([]); setWalls([]); }}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-700 rounded flex items-center gap-2 text-white"
+                >
+                  <Trash2 size={20} />
+                  Clear
+                </button>
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setTool('circle')}
+                    className={`px-4 py-2 rounded flex items-center gap-2 text-white ${tool === 'circle' ? 'bg-green-600' : 'bg-gray-700 hover:bg-gray-600'}`}
+                  >
+                    <Circle size={20} />
+                    Circle
+                  </button>
+                  <button
+                    onClick={() => setTool('box')}
+                    className={`px-4 py-2 rounded flex items-center gap-2 text-white ${tool === 'box' ? 'bg-green-600' : 'bg-gray-700 hover:bg-gray-600'}`}
+                  >
+                    <Square size={20} />
+                    Box
+                  </button>
+                  <button
+                    onClick={() => setTool('wall')}
+                    className={`px-4 py-2 rounded flex items-center gap-2 text-white ${tool === 'wall' ? 'bg-green-600' : 'bg-gray-700 hover:bg-gray-600'}`}
+                  >
+                    <Pencil size={20} />
+                    Wall
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <label className="text-white text-sm">Gravity:</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="2"
+                    step="0.1"
+                    value={gravity}
+                    onChange={(e) => setGravity(parseFloat(e.target.value))}
+                    className="w-32"
+                  />
+                  <span className="text-white text-sm w-8">{gravity.toFixed(1)}</span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <label className="text-white text-sm">Bounce:</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={restitution}
+                    onChange={(e) => setRestitution(parseFloat(e.target.value))}
+                    className="w-32"
+                  />
+                  <span className="text-white text-sm w-8">{restitution.toFixed(2)}</span>
+                </div>
+              </div>
+
+              <canvas
+                ref={canvasRef}
+                width={1200}
+                height={700}
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+                onMouseLeave={handleMouseUp}
+                className="flex-1 cursor-crosshair"
+              />
+            </div>
+          );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<PhysicsSandbox />);
+    </script>
+</body>
+</html>
