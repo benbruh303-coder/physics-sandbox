@@ -1,2 +1,0 @@
-# physics-sandbox
-ball game
